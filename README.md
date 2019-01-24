@@ -1,3 +1,2 @@
 # easyweb3
-
-> Warning! Alpha version, do not use in production networks
+> Warning! Under development, do not use in production networks
