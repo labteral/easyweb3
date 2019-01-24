@@ -4,4 +4,4 @@
 from .easyweb3 import EasyWeb3
 
 
-__version__ = '0.0.1a'
+__version__ = '0.1.0'

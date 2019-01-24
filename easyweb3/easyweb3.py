@@ -9,6 +9,7 @@ import time
 import logging
 from hexbytes import HexBytes
 from easysolc import Solc
+import signal
 
 
 class EasyWeb3:
@@ -16,30 +17,46 @@ class EasyWeb3:
                  filename=None,
                  password='',
                  http_provider=None,
-                 alastria_node=None):
+                 http_providers_file=None,
+                 proof_of_authority=False):
         logging.getLogger().setLevel(logging.INFO)
         logging.basicConfig(
             format='%(asctime)-15s [%(levelname)s] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S')
 
-        self.alastria_nodes = None
+        self.proof_of_authority = proof_of_authority
+        self.http_providers = None
         self.w3 = None
         self.account = None
 
-        if http_provider != None:
-            self.w3 = Web3(HTTPProvider(http_provider))
+        if http_providers_file:
+            self._set_next_http_provider_from_file(http_providers_file)
 
-        elif alastria_node != None:
-            self.set_w3_instance_alastria(alastria_node)
+        elif http_provider:
+            self._set_http_provider(http_provider)
 
         else:
             self.w3 = Web3()
 
-        self.eth = self.w3.eth
-
-        if filename != None:
+        if filename:
             self._set_account_from_keystore(filename, password)
             logging.info(f'account: {self.account.address}')
+
+    def _set_http_provider(self, http_provider):
+        self.w3 = Web3(HTTPProvider(http_provider))
+        self.eth = self.w3.eth
+        if self.proof_of_authority:
+            # PoA compatibility middleware
+            self.w3.middleware_stack.inject(geth_poa_middleware, layer=0)
+        logging.info(f'Trying to connect to {http_provider}')
+
+        # Test connection
+        try:
+            signal.signal(signal.SIGALRM, lambda: TimeoutError())
+            signal.alarm(2)
+            self.eth.blockNumber
+        finally:
+            signal.alarm(0)
 
     def _set_account_from_keystore(self, filename, password):
         try:
@@ -49,68 +66,95 @@ class EasyWeb3:
                 self.account = self.eth.account.privateKeyToAccount(
                     private_key)
         except FileNotFoundError:
-            logging.exception("message")
+            logging.exception('')
 
-    def set_w3_instance_alastria(self, node=None):
-        if node == None:
-            if self.alastria_nodes == None:
-                try:
-                    with open('alastria-nodes.json', 'r') as json_file:
-                        self.alastria_nodes = json.load(json_file)['nodes']
-                        self.alastria_node_index = 0
-                        node = self.alastria_nodes[self.alastria_node_index]
-                except FileNotFoundError:
-                    pass
-            else:
-                self.alastria_node_index = (
-                    self.alastria_node_index + 1) % len(self.alastria_nodes)
-                node = self.alastria_nodes[self.alastria_node_index]
+    def _set_next_http_provider_from_file(self, http_providers_file=None):
+        if not self.http_providers:
+            if not http_providers_file:
+                raise ValueError
+            with open(http_providers_file, 'r') as json_file:
+                self.http_providers = json.load(json_file)['nodes']
+                self.http_provider_index = 0
+                http_provider = self.http_providers[self.http_provider_index]
+        else:
+            self.http_provider_index = (self.http_provider_index + 1) % len(
+                self.http_providers)
+            http_provider = self.http_providers[self.http_provider_index]
         try:
-            # Web3 instance
-            self.w3 = Web3(Web3.HTTPProvider(f'http://{node}:22000'))
-            # PoA compatibility middleware
-            self.w3.middleware_stack.inject(geth_poa_middleware, layer=0)
+            self._set_http_provider(http_provider)
         except Exception:
-            logging.exception("message")
-            self.set_w3_instance_alastria()
+            self._set_next_http_provider_from_file()
 
     def read(self, contract, method, parameters=None):
         if parameters == None:
             parameters = []
         return getattr(contract.functions, method)(*parameters).call()
 
-    def transact(self, contract, method, parameters=None, nonce=None):
+    def get_signed_tx(self,
+                      contract,
+                      method,
+                      parameters=None,
+                      nonce=None,
+                      gas=None,
+                      gas_price=None):
         if nonce == None:
             nonce = self.eth.getTransactionCount(self.account.address,
                                                  'pending')
-
-        # TODO gas estimation and gas price
-        tx_dict = {
-            'nonce': nonce,
-            'from': self.account.address,
-            'gas': int(2e6),
-            'gasPrice': Web3.toWei(50, 'gwei')
-        }
-
         if parameters == None:
             parameters = []
 
         if method == 'constructor':
-            tx = contract.constructor(*parameters)
+            function_invocation = contract.constructor(*parameters)
         else:
-            tx = getattr(contract.functions, method)(*parameters)
+            function_invocation = getattr(contract.functions,
+                                          method)(*parameters)
 
-        built_tx = tx.buildTransaction(tx_dict)
+        if gas == None:
+            try:
+                gas = function_invocation.estimateGas()
+            except Exception:
+                gas = int(4e6)
+                logging.warn(f'Could not estimate gas for {method}()')
+
+        if gas_price == None:
+            gas_price = self.w3.eth.gasPrice
+
+        logging.info(f'Signing tx with gas={gas} and gasPrice={gas_price}')
+
+        tx_dict = {
+            'nonce': nonce,
+            'from': self.account.address,
+            'gas': gas,
+            'gasPrice': gas_price
+        }
+
+        built_tx = function_invocation.buildTransaction(tx_dict)
         signed_tx = self.account.signTransaction(built_tx)
+        return signed_tx
+
+    def transact(self,
+                 contract=None,
+                 method=None,
+                 parameters=None,
+                 nonce=None,
+                 signed_tx=None):
+        if not signed_tx and (not contract or not method):
+            raise ValueError
+
+        if not signed_tx:
+            signed_tx = self.get_signed_tx(contract, method, parameters, nonce)
         tx_hash = self.eth.sendRawTransaction(signed_tx.rawTransaction)
 
+        attempts = 0
         receipt = None
         while not receipt:
-            logging.info('Waiting for the tx to be included in a block...')
+            logging.info(
+                f'Waiting for the tx to be included in a block ({attempts})')
             receipt = self.eth.getTransactionReceipt(tx_hash)
+            attempts += 1
             time.sleep(1)
         logging.info(
-            f'Transaction included in the block #{receipt["blockNumber"]}')
+            f'Transaction included in block #{receipt["blockNumber"]}')
         return receipt
 
     def write(self, contract, method, parameters, nonce=None):
