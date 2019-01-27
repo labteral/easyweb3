@@ -20,11 +20,6 @@ class EasyWeb3:
                  http_providers=None,
                  http_providers_file=None,
                  proof_of_authority=False):
-        logging.getLogger().setLevel(logging.INFO)
-        logging.basicConfig(
-            format='%(asctime)-15s [%(levelname)s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S')
-
         self.proof_of_authority = proof_of_authority
         self.http_providers = None
         self.w3 = None
@@ -48,6 +43,8 @@ class EasyWeb3:
         else:
             self.w3 = Web3()
 
+        self.solc = None
+
         if filename:
             self._set_account_from_keystore(filename, password)
             logging.info(f'account: {self.account.address}')
@@ -64,7 +61,8 @@ class EasyWeb3:
         try:
             signal.signal(signal.SIGALRM, lambda: TimeoutError())
             signal.alarm(2)
-            self.eth.blockNumber
+            if not self.w3.isConnected():
+                raise ConnectionError
         finally:
             signal.alarm(0)
 
@@ -125,7 +123,7 @@ class EasyWeb3:
                 logging.warn(f'Could not estimate gas for {method}()')
 
         if gas_price == None:
-            gas_price = self.w3.eth.gasPrice
+            gas_price = self.eth.gasPrice
 
         logging.info(f'Signing tx with gas={gas} and gasPrice={gas_price}')
 
@@ -171,13 +169,35 @@ class EasyWeb3:
     def deploy(self, contract, parameters=None, nonce=None):
         return self.transact(contract, 'constructor', parameters, nonce)
 
-    @staticmethod
-    def keccak256(item):
-        return Web3.sha3(text=str(item)).hex()[2:]
-
-    @staticmethod
-    def hash(item):
-        return EasyWeb3.keccak256(item)
+    def get_contract(self,
+                     contract_dict=None,
+                     source=None,
+                     contract_name=None,
+                     address=None,
+                     abi_file=None,
+                     bytecode_file=None):
+        contract = None
+        if source and contract_name:
+            if not self.solc:
+                self.solc = Solc()
+            contract_dict = self.solc.compile(source=source)[contract_name]
+        if contract_dict:
+            contract = self.eth.contract(
+                abi=contract_dict['abi'], bytecode=contract_dict['bytecode'], address=address)            
+        elif abi_file:
+            with open(abi_file, 'r') as abi_file:
+                abi = json.loads(abi_file.read())
+            if address:
+                contract = self.eth.contract(abi=abi, address=address)
+            elif bytecode_file:
+                bytecode = None
+                if bytecode_file:
+                    with open(bytecode_file, 'r') as bytecode_file:
+                        bytecode = bytecode_file.read()
+                    contract = self.eth.contract(abi=abi, bytecode=bytecode)
+                else:
+                    raise ValueError("The bytecode or the address must be provided")
+        return contract
 
     def get_rsv_from_signature(self, signature):
         if signature[0] == '0' and signature[1] == 'x':
@@ -192,10 +212,15 @@ class EasyWeb3:
         signature = self.account.signHash(prefixed_hash)['signature'].hex()[2:]
         return signature
 
-    @classmethod
-    def recover_address(cls, text, signature):
-        if not hasattr(cls, 'w3'):
-            cls.w3 = Web3()
+    def recover_address(self, text, signature):
         prefixed_hash = defunct_hash_message(text=text)
-        return cls.w3.eth.account.recoverHash(
+        return self.eth.account.recoverHash(
             prefixed_hash, signature=signature)
+
+    @staticmethod
+    def keccak256(item):
+        return Web3.sha3(text=str(item)).hex()[2:]
+
+    @staticmethod
+    def hash(item):
+        return EasyWeb3.keccak256(item)

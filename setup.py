@@ -8,7 +8,7 @@ import easyweb3
 setup(
     name='easyweb3',
     version=easyweb3.__version__,
-    description='Python helper for web3py',
+    description='Work easier with Web3 in Python',
     url='https://github.com/brunneis/easyweb3',
     author='Rodrigo Martínez',
     author_email='dev@brunneis.com',
