@@ -19,14 +19,16 @@ class EasyWeb3:
                  http_provider=None,
                  http_providers=None,
                  http_providers_file=None,
-                 proof_of_authority=False):
+                 proof_of_authority=False,
+                 timeout=1):
         self.proof_of_authority = proof_of_authority
         self.http_providers = None
         self.w3 = None
         self.account = None
+        self.timeout = timeout
 
         if http_provider:
-            self._set_http_provider(http_provider)
+            self.set_http_provider(http_provider)
         elif http_providers or http_providers_file:
             self.http_provider_index = -1
             if http_providers:
@@ -36,20 +38,20 @@ class EasyWeb3:
                     raise ValueError
                 self.http_providers = http_providers
             elif http_providers_file:
-                self._set_http_providers_from_file(http_providers_file)
+                self.set_http_providers_from_file(http_providers_file)
             else:
                 raise ValueError
-            self._set_next_http_provider()
+            self.set_next_http_provider()
         else:
             self.w3 = Web3()
 
         self.solc = None
 
         if filename:
-            self._set_account_from_keystore(filename, password)
+            self.set_account_from_keystore(filename, password)
             logging.info(f'account: {self.account.address}')
 
-    def _set_http_provider(self, http_provider):
+    def set_http_provider(self, http_provider):
         self.w3 = Web3(HTTPProvider(http_provider))
         self.eth = self.w3.eth
         if self.proof_of_authority:
@@ -60,13 +62,13 @@ class EasyWeb3:
         # Test connection
         try:
             signal.signal(signal.SIGALRM, lambda: TimeoutError())
-            signal.alarm(2)
+            signal.alarm(self.timeout)
             if not self.w3.isConnected():
                 raise ConnectionError
         finally:
             signal.alarm(0)
 
-    def _set_account_from_keystore(self, filename, password):
+    def set_account_from_keystore(self, filename, password):
         try:
             with open(filename, 'r') as keystore:
                 private_key = self.eth.account.decrypt(
@@ -76,20 +78,20 @@ class EasyWeb3:
         except FileNotFoundError:
             logging.exception('')
 
-    def _set_http_providers_from_file(self, http_providers_file):
+    def set_http_providers_from_file(self, http_providers_file):
         if not http_providers_file:
             raise ValueError
         with open(http_providers_file, 'r') as json_file:
             self.http_providers = json.load(json_file)['nodes']
 
-    def _set_next_http_provider(self):
+    def set_next_http_provider(self):
         self.http_provider_index = (self.http_provider_index + 1) % len(
             self.http_providers)
         http_provider = self.http_providers[self.http_provider_index]
         try:
-            self._set_http_provider(http_provider)
+            self.set_http_provider(http_provider)
         except Exception:
-            self._set_next_http_provider()
+            self.set_next_http_provider()
 
     def read(self, contract, method, parameters=None):
         if parameters == None:
