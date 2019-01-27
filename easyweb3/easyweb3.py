@@ -17,6 +17,7 @@ class EasyWeb3:
                  filename=None,
                  password='',
                  http_provider=None,
+                 http_providers=None,
                  http_providers_file=None,
                  proof_of_authority=False):
         logging.getLogger().setLevel(logging.INFO)
@@ -29,12 +30,21 @@ class EasyWeb3:
         self.w3 = None
         self.account = None
 
-        if http_providers_file:
-            self._set_next_http_provider_from_file(http_providers_file)
-
-        elif http_provider:
+        if http_provider:
             self._set_http_provider(http_provider)
-
+        elif http_providers or http_providers_file:
+            self.http_provider_index = -1
+            if http_providers:
+                if type(http_providers) == str:
+                    http_providers = http_providers.replace(' ','').split(',')
+                elif type(http_providers) != list:
+                    raise ValueError
+                self.http_providers = http_providers
+            elif http_providers_file:
+                self._set_http_providers_from_file(http_providers_file)
+            else:
+                raise ValueError
+            self._set_next_http_provider()
         else:
             self.w3 = Web3()
 
@@ -68,22 +78,20 @@ class EasyWeb3:
         except FileNotFoundError:
             logging.exception('')
 
-    def _set_next_http_provider_from_file(self, http_providers_file=None):
-        if not self.http_providers:
-            if not http_providers_file:
-                raise ValueError
-            with open(http_providers_file, 'r') as json_file:
-                self.http_providers = json.load(json_file)['nodes']
-                self.http_provider_index = 0
-                http_provider = self.http_providers[self.http_provider_index]
-        else:
-            self.http_provider_index = (self.http_provider_index + 1) % len(
-                self.http_providers)
-            http_provider = self.http_providers[self.http_provider_index]
+    def _set_http_providers_from_file(self, http_providers_file):
+        if not http_providers_file:
+            raise ValueError
+        with open(http_providers_file, 'r') as json_file:
+            self.http_providers = json.load(json_file)['nodes']
+
+    def _set_next_http_provider(self):
+        self.http_provider_index = (self.http_provider_index + 1) % len(
+            self.http_providers)
+        http_provider = self.http_providers[self.http_provider_index]
         try:
             self._set_http_provider(http_provider)
         except Exception:
-            self._set_next_http_provider_from_file()
+            self._set_next_http_provider()
 
     def read(self, contract, method, parameters=None):
         if parameters == None:
