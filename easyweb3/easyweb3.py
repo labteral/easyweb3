@@ -20,7 +20,7 @@ class EasyWeb3:
                  http_providers=None,
                  http_providers_file=None,
                  proof_of_authority=False,
-                 timeout=1):
+                 timeout=3):
         self.proof_of_authority = proof_of_authority
         self.http_providers = None
         self.w3 = None
@@ -123,6 +123,11 @@ class EasyWeb3:
             except Exception:
                 gas = int(4e6)
                 logging.warn(f'Could not estimate gas for {method}()')
+            if gas == 0 or gas == self.eth.getBlock('latest').gasLimit:
+                logging.error(f'Gas estimation for {method}(): {gas}, aborting.')
+                return
+        else:
+            gas = int(gas)
 
         if gas_price == None:
             gas_price = self.eth.gasPrice
@@ -145,15 +150,22 @@ class EasyWeb3:
                  method=None,
                  parameters=None,
                  nonce=None,
-                 signed_tx=None):
+                 gas=None,
+                 gas_price=None,
+                 signed_tx=None,
+                 asynchronous=False):
         if not signed_tx and (not contract or not method):
             raise ValueError
 
         if not signed_tx:
-            signed_tx = self.get_signed_tx(contract, method, parameters, nonce)
+            signed_tx = self.get_signed_tx(contract, method, parameters, nonce, gas, gas_price)
         tx_hash = self.eth.sendRawTransaction(signed_tx.rawTransaction)
 
         attempts = 0
+
+        if asynchronous:
+            return tx_hash
+
         receipt = None
         while not receipt:
             logging.info(
@@ -165,11 +177,11 @@ class EasyWeb3:
             f'Transaction included in block #{receipt["blockNumber"]}')
         return receipt
 
-    def write(self, contract, method, parameters, nonce=None):
-        return self.transact(contract, method, parameters, nonce)
+    def write(self, contract, method, parameters, nonce=None, gas=None, gas_price=None, signed_tx=None):
+        return self.transact(contract, method, parameters, nonce, gas, gas_price, signed_tx)
 
-    def deploy(self, contract, parameters=None, nonce=None):
-        return self.transact(contract, 'constructor', parameters, nonce)
+    def deploy(self, contract, parameters=None, nonce=None, gas=None, gas_price=None, signed_tx=None):
+        return self.transact(contract, 'constructor', parameters, nonce, gas, gas_price, signed_tx)
 
     def get_contract(self,
                      contract_dict=None,
