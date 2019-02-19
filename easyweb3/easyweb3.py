@@ -44,8 +44,10 @@ class EasyWeb3:
             self.set_next_http_provider()
         else:
             self.w3 = Web3()
+            self.eth = self.w3.eth
 
-        self.solc = None
+        self.__class__.w3 = self.w3
+        self.__class__.eth = self.eth
 
         if filename:
             self.set_account_from_keystore(filename, password)
@@ -93,7 +95,8 @@ class EasyWeb3:
         except Exception:
             self.set_next_http_provider()
 
-    def read(self, contract, method, parameters=None):
+    @staticmethod
+    def read(contract, method, parameters=None):
         if parameters == None:
             parameters = []
         return getattr(contract.functions, method)(*parameters).call()
@@ -192,7 +195,7 @@ class EasyWeb3:
                      bytecode_file=None):
         contract = None
         if source and contract_name:
-            if not self.solc:
+            if not hasattr(self, 'solc'):
                 self.solc = Solc()
             contract_dict = self.solc.compile(source=source)[contract_name]
         if contract_dict:
@@ -213,7 +216,8 @@ class EasyWeb3:
                     raise ValueError("The bytecode or the address must be provided")
         return contract
 
-    def get_rsv_from_signature(self, signature):
+    @staticmethod
+    def get_rsv_from_signature(signature):
         if signature[0] == '0' and signature[1] == 'x':
             signature = signature[2:]
         r = signature[:64]
@@ -226,9 +230,12 @@ class EasyWeb3:
         signature = self.account.signHash(prefixed_hash)['signature'].hex()[2:]
         return signature
 
-    def recover_address(self, text, signature):
+    @classmethod
+    def recover_address(cls, text, signature):
+        if not hasattr(cls, 'eth'):
+            cls.eth = Web3().eth
         prefixed_hash = defunct_hash_message(text=text)
-        return self.eth.account.recoverHash(
+        return cls.eth.account.recoverHash(
             prefixed_hash, signature=signature)
 
     @staticmethod
