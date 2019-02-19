@@ -5,7 +5,7 @@ from .easyweb3 import EasyWeb3
 import logging
 
 
-__version__ = '0.1.4'
+__version__ = '0.1.5'
 
 logging.getLogger().setLevel(logging.INFO)
 logging.basicConfig(
