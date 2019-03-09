@@ -167,7 +167,7 @@ class EasyWeb3:
         attempts = 0
 
         if asynchronous:
-            return tx_hash
+            return {'transactionHash': tx_hash}
 
         receipt = None
         while not receipt:
