@@ -33,7 +33,7 @@ class EasyWeb3:
             self.http_provider_index = -1
             if http_providers:
                 if type(http_providers) == str:
-                    http_providers = http_providers.replace(' ','').split(',')
+                    http_providers = http_providers.replace(' ', '').split(',')
                 elif type(http_providers) != list:
                     raise ValueError
                 self.http_providers = http_providers
@@ -73,10 +73,8 @@ class EasyWeb3:
     def set_account_from_keystore(self, filename, password):
         try:
             with open(filename, 'r') as keystore:
-                private_key = self.eth.account.decrypt(
-                    next(keystore), password)
-                self.account = self.eth.account.privateKeyToAccount(
-                    private_key)
+                private_key = self.eth.account.decrypt(next(keystore), password)
+                self.account = self.eth.account.privateKeyToAccount(private_key)
         except FileNotFoundError:
             logging.exception('')
 
@@ -87,8 +85,7 @@ class EasyWeb3:
             self.http_providers = json.load(json_file)['nodes']
 
     def set_next_http_provider(self):
-        self.http_provider_index = (self.http_provider_index + 1) % len(
-            self.http_providers)
+        self.http_provider_index = (self.http_provider_index + 1) % len(self.http_providers)
         http_provider = self.http_providers[self.http_provider_index]
         try:
             self.set_http_provider(http_provider)
@@ -101,24 +98,16 @@ class EasyWeb3:
             parameters = []
         return getattr(contract.functions, method)(*parameters).call()
 
-    def get_signed_tx(self,
-                      contract,
-                      method,
-                      parameters=None,
-                      nonce=None,
-                      gas=None,
-                      gas_price=None):
+    def get_signed_tx(self, contract, method, parameters=None, nonce=None, gas=None, gas_price=None):
         if nonce == None:
-            nonce = self.eth.getTransactionCount(self.account.address,
-                                                 'pending')
+            nonce = self.eth.getTransactionCount(self.account.address, 'pending')
         if parameters == None:
             parameters = []
 
         if method == 'constructor':
             function_invocation = contract.constructor(*parameters)
         else:
-            function_invocation = getattr(contract.functions,
-                                          method)(*parameters)
+            function_invocation = getattr(contract.functions, method)(*parameters)
 
         if gas == None:
             try:
@@ -137,12 +126,7 @@ class EasyWeb3:
 
         logging.info(f'Signing tx with gas={gas} and gasPrice={gas_price}')
 
-        tx_dict = {
-            'nonce': nonce,
-            'from': self.account.address,
-            'gas': gas,
-            'gasPrice': gas_price
-        }
+        tx_dict = {'nonce': nonce, 'from': self.account.address, 'gas': gas, 'gasPrice': gas_price}
 
         built_tx = function_invocation.buildTransaction(tx_dict)
         signed_tx = self.account.signTransaction(built_tx)
@@ -162,7 +146,12 @@ class EasyWeb3:
 
         if not signed_tx:
             signed_tx = self.get_signed_tx(contract, method, parameters, nonce, gas, gas_price)
-        tx_hash = self.eth.sendRawTransaction(signed_tx.rawTransaction)
+
+        if type(signed_tx) != HexBytes:
+            raw_tx = signed_tx.rawTransaction
+        else:
+            raw_tx = signed_tx
+        tx_hash = self.eth.sendRawTransaction(raw_tx)
 
         attempts = 0
 
@@ -171,13 +160,11 @@ class EasyWeb3:
 
         receipt = None
         while not receipt:
-            logging.info(
-                f'Waiting for the tx to be included in a block ({attempts})')
+            logging.info(f'Waiting for the tx to be included in a block ({attempts})')
             receipt = self.eth.getTransactionReceipt(tx_hash)
             attempts += 1
             time.sleep(1)
-        logging.info(
-            f'Transaction included in block #{receipt["blockNumber"]}')
+        logging.info(f'Transaction included in block #{receipt["blockNumber"]}')
         return receipt
 
     def write(self, contract, method, parameters, nonce=None, gas=None, gas_price=None, signed_tx=None):
@@ -199,8 +186,7 @@ class EasyWeb3:
                 self.solc = Solc()
             contract_dict = self.solc.compile(source=source)[contract_name]
         if contract_dict:
-            contract = self.eth.contract(
-                abi=contract_dict['abi'], bytecode=contract_dict['bytecode'], address=address)            
+            contract = self.eth.contract(abi=contract_dict['abi'], bytecode=contract_dict['bytecode'], address=address)
         elif abi_file:
             with open(abi_file, 'r') as abi_file:
                 abi = json.loads(abi_file.read())
@@ -235,8 +221,7 @@ class EasyWeb3:
         if not hasattr(cls, 'eth'):
             cls.eth = Web3().eth
         prefixed_hash = defunct_hash_message(text=text)
-        return cls.eth.account.recoverHash(
-            prefixed_hash, signature=signature)
+        return cls.eth.account.recoverHash(prefixed_hash, signature=signature)
 
     @staticmethod
     def keccak256(item):
