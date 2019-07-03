@@ -18,6 +18,7 @@ class EasyWeb3:
     DEFAULT_GAS = int(4e6)
     WAIT_LOOP_SECONDS = 0.1
     WAIT_LOG_LOOP_SECONDS = 10
+    DEFAULT_CONNECTION_TIMEOUT = 3
 
     @classmethod
     def init_class(cls):
@@ -30,12 +31,16 @@ class EasyWeb3:
                  http_providers=None,
                  http_providers_file=None,
                  proof_of_authority=False,
-                 timeout=3):
+                 timeout=None):
         self.proof_of_authority = proof_of_authority
         self.http_providers = None
         self.web3 = None
         self.account = None
-        self.timeout = timeout
+
+        if timeout is None:
+            self.timeout = EasyWeb3.DEFAULT_CONNECTION_TIMEOUT
+        else:
+            self.timeout = timeout
 
         if http_providers or http_providers_file:
             self.http_provider_index = -1
