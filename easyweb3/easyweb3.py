@@ -10,9 +10,19 @@ import logging
 from hexbytes import HexBytes
 from easysolc import Solc
 import signal
+from math import ceil
 
 
 class EasyWeb3:
+
+    DEFAULT_GAS = int(4e6)
+    WAIT_LOOP_SECONDS = 0.1
+    WAIT_LOG_LOOP_SECONDS = 10
+
+    @classmethod
+    def init_class(cls):
+        cls.web3 = Web3()
+
     def __init__(self,
                  filename=None,
                  password='',
@@ -23,13 +33,11 @@ class EasyWeb3:
                  timeout=3):
         self.proof_of_authority = proof_of_authority
         self.http_providers = None
-        self.w3 = None
+        self.web3 = None
         self.account = None
         self.timeout = timeout
 
-        if http_provider:
-            self.set_http_provider(http_provider)
-        elif http_providers or http_providers_file:
+        if http_providers or http_providers_file:
             self.http_provider_index = -1
             if http_providers:
                 if type(http_providers) == str:
@@ -42,30 +50,30 @@ class EasyWeb3:
             else:
                 raise ValueError
             self.set_next_http_provider()
+            self.eth = self.web3.eth
+        elif http_provider:
+            self.set_http_provider(http_provider)
+            self.eth = self.web3.eth
         else:
-            self.w3 = Web3()
-            self.eth = self.w3.eth
-
-        self.__class__.w3 = self.w3
-        self.__class__.eth = self.eth
+            self.web3 = Web3()
 
         if filename:
             self.set_account_from_keystore(filename, password)
             logging.info(f'account: {self.account.address}')
 
     def set_http_provider(self, http_provider):
-        self.w3 = Web3(HTTPProvider(http_provider))
-        self.eth = self.w3.eth
+        self.web3 = Web3(HTTPProvider(http_provider))
+        self.eth = self.web3.eth
         if self.proof_of_authority:
             # PoA compatibility middleware
-            self.w3.middleware_stack.inject(geth_poa_middleware, layer=0)
-        logging.info(f'Trying to connect to {http_provider}')
+            self.web3.middleware_stack.inject(geth_poa_middleware, layer=0)
+        logging.info(f'trying to connect to {http_provider}')
 
         # Test connection
         try:
             signal.signal(signal.SIGALRM, lambda: TimeoutError())
             signal.alarm(self.timeout)
-            if not self.w3.isConnected():
+            if not self.web3.isConnected():
                 raise ConnectionError
         finally:
             signal.alarm(0)
@@ -94,84 +102,134 @@ class EasyWeb3:
 
     @staticmethod
     def read(contract, method, parameters=None):
-        if parameters == None:
+        if parameters is None:
             parameters = []
         return getattr(contract.functions, method)(*parameters).call()
 
-    def get_signed_tx(self, contract, method, parameters=None, nonce=None, gas=None, gas_price=None):
-        if nonce == None:
-            nonce = self.eth.getTransactionCount(self.account.address, 'pending')
-        if parameters == None:
+    def _get_nonce(self, pending=True):
+        if pending:
+            return self.eth.getTransactionCount(self.account.address, 'pending')
+        return self.eth.getTransactionCount(self.account.address)
+
+    def _get_gas_price(self, gas_price, multiplier):
+        if gas_price is None:
+            gas_price = self.eth.gasPrice
+        return ceil(multiplier * gas_price)
+
+    def _get_gas_limit(self, tx_dict, gas=None):
+        if gas is None:
+            try:
+                gas = self.eth.estimateGas(tx_dict)
+            except Exception:
+                gas = int(EasyWeb3.DEFAULT_GAS)
+                logging.warn(f"failed to estimate gas, using default.")
+        else:
+            gas = int(gas)
+        if gas >= self.eth.getBlock('latest').gasLimit or gas == 0:
+            raise ValueError(f'gas limit not valid: {gas}')
+
+        return gas
+
+    def _update_tx_dict_gas_params(self, tx_dict, gas, gas_price, gas_price_multiplier):
+        gas = self._get_gas_limit(tx_dict, gas=gas)
+        logging.info(f"gas limit: {gas:,}")
+        tx_dict.update({'gas': gas})
+
+        gas_price = self._get_gas_price(gas_price, gas_price_multiplier)
+        tx_dict.update({'gasPrice': gas_price})
+        logging.info(f"network gas price: {self.web3.fromWei(self.eth.gasPrice, 'gwei')} Gwei; using {self.web3.fromWei(gas_price, 'gwei')} Gwei (x{gas_price_multiplier})")
+
+    def get_tx(self,
+               to,
+               value=0,
+               data=None,
+               nonce=None,
+               gas=None,
+               gas_price=None,
+               gas_price_multiplier=1.0,
+               pending=True):
+
+        if nonce is None:
+            nonce = self._get_nonce(pending)
+
+        tx_dict = {'from': self.account.address, 'to': to, 'nonce': nonce, 'value': value}
+
+        if data is not None:
+            tx_dict.update({'data': data})
+
+        self._update_tx_dict_gas_params(tx_dict, gas, gas_price, gas_price_multiplier)
+        return tx_dict
+
+    def get_contract_tx(self,
+                        contract,
+                        method='constructor',
+                        parameters=None,
+                        nonce=None,
+                        gas=None,
+                        gas_price=None,
+                        gas_price_multiplier=1.0,
+                        pending=True):
+
+        if parameters is None:
             parameters = []
 
         if method == 'constructor':
-            function_invocation = contract.constructor(*parameters)
+            invocation = contract.constructor(*parameters)
         else:
-            function_invocation = getattr(contract.functions, method)(*parameters)
+            invocation = getattr(contract.functions, method)(*parameters)
 
-        if gas == None:
-            try:
-                gas = function_invocation.estimateGas()
-            except Exception:
-                gas = int(4e6)
-                logging.warn(f'Could not estimate gas for {method}()')
-            if gas == 0 or gas == self.eth.getBlock('latest').gasLimit:
-                logging.error(f'Gas estimation for {method}(): {gas}, aborting.')
-                return
-        else:
-            gas = int(gas)
+        if nonce is None:
+            nonce = self._get_nonce(pending)
 
-        if gas_price == None:
-            gas_price = self.eth.gasPrice
+        tx_dict = invocation.buildTransaction({'from': self.account.address, 'nonce': nonce, 'gas': 0, 'gasPrice': 0})
+        self._update_tx_dict_gas_params(tx_dict, gas, gas_price, gas_price_multiplier)
+        return tx_dict
 
-        logging.info(f'Signing tx with gas={gas} and gasPrice={gas_price}')
+    def sign_tx(self, tx):
+        return self.account.signTransaction(tx)
 
-        tx_dict = {'nonce': nonce, 'from': self.account.address, 'gas': gas, 'gasPrice': gas_price}
+    def transact(self, tx=None, signed_tx=None, asynchronous=False):
+        if (tx is None and signed_tx is None) or \
+           (tx is not None and signed_tx is not None):
+            raise AttributeError
 
-        built_tx = function_invocation.buildTransaction(tx_dict)
-        signed_tx = self.account.signTransaction(built_tx)
-        return signed_tx
+        if tx is not None:
+            signed_tx = self.sign_tx(tx)
 
-    def transact(self,
-                 contract=None,
-                 method=None,
-                 parameters=None,
-                 nonce=None,
-                 gas=None,
-                 gas_price=None,
-                 signed_tx=None,
-                 asynchronous=False):
-        if not signed_tx and (not contract or not method):
-            raise ValueError
-
-        if not signed_tx:
-            signed_tx = self.get_signed_tx(contract, method, parameters, nonce, gas, gas_price)
-
-        if type(signed_tx) != HexBytes:
+        if type(signed_tx) is not HexBytes:
             raw_tx = signed_tx.rawTransaction
         else:
             raw_tx = signed_tx
         tx_hash = self.eth.sendRawTransaction(raw_tx)
 
-        attempts = 0
-
         if asynchronous:
             return {'transactionHash': tx_hash}
 
         receipt = None
+        attempts = 0
         while not receipt:
-            logging.info(f'Waiting for the tx to be included in a block ({attempts})')
+            elapsed_seconds = attempts * EasyWeb3.WAIT_LOOP_SECONDS
+            if elapsed_seconds % EasyWeb3.WAIT_LOG_LOOP_SECONDS == 0:
+                logging.info(f'waiting to be included in a block ({int(elapsed_seconds)} elapsed seconds)')
             receipt = self.eth.getTransactionReceipt(tx_hash)
             attempts += 1
-            time.sleep(1)
-        logging.info(f'Transaction included in block #{receipt["blockNumber"]}')
+            time.sleep(EasyWeb3.WAIT_LOOP_SECONDS)
+        logging.info(f'transaction {tx_hash.hex()} included in block #{receipt["blockNumber"]}')
         return receipt
 
-    def write(self, contract, method, parameters, nonce=None, gas=None, gas_price=None, signed_tx=None):
-        return self.transact(contract, method, parameters, nonce, gas, gas_price, signed_tx)
+    def _build_tx_and_transact(self, *args, **kwargs):
+        tx = self.get_contract_tx(*args, **kwargs)
+        asynchronous = False
+        if 'asynchronous' in kwargs:
+            asynchronous = kwargs['asynchronous']
+        return self.transact(tx=tx, asynchronous=asynchronous)
 
-    def deploy(self, contract, parameters=None, nonce=None, gas=None, gas_price=None, signed_tx=None):
-        return self.transact(contract, 'constructor', parameters, nonce, gas, gas_price, signed_tx)
+    def write(self, *args, **kwargs):
+        return self._build_tx_and_transact(*args, **kwargs)
+
+    def deploy(self, *args, **kwargs):
+        kwargs['method'] = 'constructor'
+        return self._build_tx_and_transact(*args, **kwargs)
 
     def get_contract(self,
                      contract_dict=None,
@@ -230,3 +288,6 @@ class EasyWeb3:
     @staticmethod
     def hash(item):
         return EasyWeb3.keccak256(item)
+
+
+EasyWeb3.init_class()
