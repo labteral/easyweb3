@@ -55,12 +55,12 @@ class EasyWeb3:
             else:
                 raise ValueError
             self.set_next_http_provider()
-            self.eth = self.web3.eth
         elif http_provider:
             self.set_http_provider(http_provider)
-            self.eth = self.web3.eth
         else:
             self.web3 = Web3()
+
+        self.eth = self.web3.eth
 
         if filename:
             self.set_account_from_keystore(filename, password)
@@ -68,7 +68,6 @@ class EasyWeb3:
 
     def set_http_provider(self, http_provider):
         self.web3 = Web3(HTTPProvider(http_provider))
-        self.eth = self.web3.eth
         if self.proof_of_authority:
             # PoA compatibility middleware
             self.web3.middleware_stack.inject(geth_poa_middleware, layer=0)
@@ -142,7 +141,9 @@ class EasyWeb3:
 
         gas_price = self._get_gas_price(gas_price, gas_price_multiplier)
         tx_dict.update({'gasPrice': gas_price})
-        logging.info(f"network gas price: {self.web3.fromWei(self.eth.gasPrice, 'gwei')} Gwei; using {self.web3.fromWei(gas_price, 'gwei')} Gwei (x{gas_price_multiplier})")
+        logging.info(
+            f"network gas price: {self.web3.fromWei(self.eth.gasPrice, 'gwei')} Gwei; using {self.web3.fromWei(gas_price, 'gwei')} Gwei (x{gas_price_multiplier})"
+        )
 
     def get_tx(self,
                to,
