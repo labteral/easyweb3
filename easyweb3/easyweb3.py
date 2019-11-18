@@ -9,7 +9,6 @@ import time
 import logging
 from hexbytes import HexBytes
 from easysolc import Solc
-import signal
 from math import ceil
 
 
@@ -18,7 +17,7 @@ class EasyWeb3:
     DEFAULT_GAS = int(4e6)
     WAIT_LOOP_SECONDS = 0.1
     WAIT_LOG_LOOP_SECONDS = 10
-    DEFAULT_CONNECTION_TIMEOUT = 3
+    DEFAULT_CONNECTION_TIMEOUT = 10
 
     @classmethod
     def init_class(cls):
@@ -67,20 +66,15 @@ class EasyWeb3:
             logging.info(f'account: {self.account.address}')
 
     def set_http_provider(self, http_provider):
-        self.web3 = Web3(HTTPProvider(http_provider))
+        self.web3 = Web3(HTTPProvider(http_provider, request_kwargs={'timeout': self.timeout}))
         if self.proof_of_authority:
             # PoA compatibility middleware
             self.web3.middleware_stack.inject(geth_poa_middleware, layer=0)
         logging.info(f'trying to connect to {http_provider}')
 
         # Test connection
-        try:
-            signal.signal(signal.SIGALRM, lambda: TimeoutError())
-            signal.alarm(self.timeout)
-            if not self.web3.isConnected():
-                raise ConnectionError
-        finally:
-            signal.alarm(0)
+        if not self.web3.isConnected():
+            raise ConnectionError
 
     def set_account_from_keystore(self, filename, password):
         try:
