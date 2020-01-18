@@ -23,8 +23,38 @@ class EasyWeb3:
     def init_class(cls):
         cls.web3 = Web3()
 
+    @staticmethod
+    def read(contract, method, parameters=None):
+        if parameters is None:
+            parameters = []
+        return getattr(contract.functions, method)(*parameters).call()
+
+    @staticmethod
+    def get_rsv_from_signature(signature):
+        if signature[0] == '0' and signature[1] == 'x':
+            signature = signature[2:]
+        r = signature[:64]
+        s = signature[64:128]
+        v = signature[128:]
+        return r, s, int(v, 16)
+
+    @classmethod
+    def recover_address(cls, text, signature):
+        if not hasattr(cls, 'eth'):
+            cls.eth = Web3().eth
+        prefixed_hash = defunct_hash_message(text=text)
+        return cls.eth.account.recoverHash(prefixed_hash, signature=signature)
+
+    @staticmethod
+    def keccak256(item):
+        return Web3.sha3(text=str(item)).hex()[2:]
+
+    @staticmethod
+    def hash(item):
+        return EasyWeb3.keccak256(item)
+
     def __init__(self,
-                 filename=None,
+                 account=None,
                  password='',
                  http_provider=None,
                  http_providers=None,
@@ -53,7 +83,7 @@ class EasyWeb3:
                 self.set_http_providers_from_file(http_providers_file)
             else:
                 raise ValueError
-            self.set_next_http_provider()
+            self.next_http_provider()
         elif http_provider:
             self.set_http_provider(http_provider)
         else:
@@ -61,9 +91,12 @@ class EasyWeb3:
 
         self.eth = self.web3.eth
 
-        if filename:
-            self.set_account_from_keystore(filename, password)
-            logging.info(f'account: {self.account.address}')
+        if account:
+            if isinstance(account, dict):
+                self.set_account_from_dict(account, password)
+            else:
+                self.set_account_from_file(account, password)
+            logging.info(f'loaded account: {self.account.address}')
 
     def set_http_provider(self, http_provider):
         self.web3 = Web3(HTTPProvider(http_provider, request_kwargs={'timeout': self.timeout}))
@@ -76,11 +109,14 @@ class EasyWeb3:
         if not self.web3.isConnected():
             raise ConnectionError
 
-    def set_account_from_keystore(self, filename, password):
+    def set_account_from_dict(self, keystore, password):
+        private_key = self.eth.account.decrypt(keystore, password)
+        self.account = self.eth.account.privateKeyToAccount(private_key)
+
+    def set_account_from_file(self, filename, password):
         try:
-            with open(filename, 'r') as keystore:
-                private_key = self.eth.account.decrypt(next(keystore), password)
-                self.account = self.eth.account.privateKeyToAccount(private_key)
+            with open(filename, 'r') as keystore_file:
+                self.set_account_from_dict(next(keystore_file), password)
         except FileNotFoundError:
             logging.exception('')
 
@@ -90,54 +126,13 @@ class EasyWeb3:
         with open(http_providers_file, 'r') as json_file:
             self.http_providers = json.load(json_file)['nodes']
 
-    def set_next_http_provider(self):
+    def next_http_provider(self):
         self.http_provider_index = (self.http_provider_index + 1) % len(self.http_providers)
         http_provider = self.http_providers[self.http_provider_index]
         try:
             self.set_http_provider(http_provider)
         except Exception:
-            self.set_next_http_provider()
-
-    @staticmethod
-    def read(contract, method, parameters=None):
-        if parameters is None:
-            parameters = []
-        return getattr(contract.functions, method)(*parameters).call()
-
-    def _get_nonce(self, pending=True):
-        if pending:
-            return self.eth.getTransactionCount(self.account.address, 'pending')
-        return self.eth.getTransactionCount(self.account.address)
-
-    def _get_gas_price(self, gas_price, multiplier):
-        if gas_price is None:
-            gas_price = self.eth.gasPrice
-        return ceil(multiplier * gas_price)
-
-    def _get_gas_limit(self, tx_dict, gas=None):
-        if gas is None:
-            try:
-                gas = self.eth.estimateGas(tx_dict)
-            except Exception:
-                gas = int(EasyWeb3.DEFAULT_GAS)
-                logging.warn(f"failed to estimate gas, using default.")
-        else:
-            gas = int(gas)
-        if gas >= self.eth.getBlock('latest').gasLimit or gas == 0:
-            raise ValueError(f'gas limit not valid: {gas}')
-
-        return gas
-
-    def _update_tx_dict_gas_params(self, tx_dict, gas, gas_price, gas_price_multiplier):
-        gas = self._get_gas_limit(tx_dict, gas=gas)
-        logging.info(f"gas limit: {gas:,}")
-        tx_dict.update({'gas': gas})
-
-        gas_price = self._get_gas_price(gas_price, gas_price_multiplier)
-        tx_dict.update({'gasPrice': gas_price})
-        logging.info(
-            f"network gas price: {self.web3.fromWei(self.eth.gasPrice, 'gwei')} Gwei; using {self.web3.fromWei(gas_price, 'gwei')} Gwei (x{gas_price_multiplier})"
-        )
+            self.next_http_provider()
 
     def get_tx(self,
                to,
@@ -217,13 +212,6 @@ class EasyWeb3:
         logging.info(f'transaction {tx_hash.hex()} included in block #{receipt["blockNumber"]}')
         return receipt
 
-    def _build_tx_and_transact(self, *args, **kwargs):
-        tx = self.get_contract_tx(*args, **kwargs)
-        asynchronous = False
-        if 'asynchronous' in kwargs:
-            asynchronous = kwargs['asynchronous']
-        return self.transact(tx=tx, asynchronous=asynchronous)
-
     def write(self, *args, **kwargs):
         return self._build_tx_and_transact(*args, **kwargs)
 
@@ -260,34 +248,52 @@ class EasyWeb3:
                     raise ValueError("The bytecode or the address must be provided")
         return contract
 
-    @staticmethod
-    def get_rsv_from_signature(signature):
-        if signature[0] == '0' and signature[1] == 'x':
-            signature = signature[2:]
-        r = signature[:64]
-        s = signature[64:128]
-        v = signature[128:]
-        return r, s, int(v, 16)
-
     def sign(self, text):
         prefixed_hash = defunct_hash_message(text=text)
         signature = self.account.signHash(prefixed_hash)['signature'].hex()[2:]
         return signature
 
-    @classmethod
-    def recover_address(cls, text, signature):
-        if not hasattr(cls, 'eth'):
-            cls.eth = Web3().eth
-        prefixed_hash = defunct_hash_message(text=text)
-        return cls.eth.account.recoverHash(prefixed_hash, signature=signature)
+    def _get_nonce(self, pending=True):
+        if pending:
+            return self.eth.getTransactionCount(self.account.address, 'pending')
+        return self.eth.getTransactionCount(self.account.address)
 
-    @staticmethod
-    def keccak256(item):
-        return Web3.sha3(text=str(item)).hex()[2:]
+    def _get_gas_price(self, gas_price, multiplier):
+        if gas_price is None:
+            gas_price = self.eth.gasPrice
+        return ceil(multiplier * gas_price)
 
-    @staticmethod
-    def hash(item):
-        return EasyWeb3.keccak256(item)
+    def _get_gas_limit(self, tx_dict, gas=None):
+        if gas is None:
+            try:
+                gas = self.eth.estimateGas(tx_dict)
+            except Exception:
+                gas = int(EasyWeb3.DEFAULT_GAS)
+                logging.warn(f"failed to estimate gas, using default.")
+        else:
+            gas = int(gas)
+        if gas >= self.eth.getBlock('latest').gasLimit or gas == 0:
+            raise ValueError(f'gas limit not valid: {gas}')
+
+        return gas
+
+    def _update_tx_dict_gas_params(self, tx_dict, gas, gas_price, gas_price_multiplier):
+        gas = self._get_gas_limit(tx_dict, gas=gas)
+        logging.info(f"gas limit: {gas:,}")
+        tx_dict.update({'gas': gas})
+
+        gas_price = self._get_gas_price(gas_price, gas_price_multiplier)
+        tx_dict.update({'gasPrice': gas_price})
+        logging.info(
+            f"network gas price: {self.web3.fromWei(self.eth.gasPrice, 'gwei')} Gwei; using {self.web3.fromWei(gas_price, 'gwei')} Gwei (x{gas_price_multiplier})"
+        )
+
+    def _build_tx_and_transact(self, *args, **kwargs):
+        tx = self.get_contract_tx(*args, **kwargs)
+        asynchronous = False
+        if 'asynchronous' in kwargs:
+            asynchronous = kwargs['asynchronous']
+        return self.transact(tx=tx, asynchronous=asynchronous)
 
 
 EasyWeb3.init_class()
