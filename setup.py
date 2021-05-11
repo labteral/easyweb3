@@ -24,4 +24,6 @@ setup(name='easyweb3',
           'Programming Language :: Python :: Implementation :: PyPy',
           'Topic :: Software Development :: Libraries :: Python Modules',
       ],
-      install_requires=['web3==4.9.2', 'easysolc'])
+      python_requires=">=3.6",
+      install_requires=['web3>=5.19.0, <6.0.0', 'easysolc'])
+
