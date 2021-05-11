@@ -8,3 +8,9 @@ EasyWeb3
     <a href="https://github.com/labteral/easyweb3/releases"><img alt="GitHub releases" src="https://img.shields.io/github/release/labteral/easyweb3.svg?style=flat-square"></a>
     <a href="https://github.com/labteral/easyweb3/blob/master/LICENSE"><img alt="License" src="https://img.shields.io/github/license/labteral/easyweb3.svg?style=flat-square&color=green"></a>
 </p>
+
+
+## Usage
+> WIP
+
+For reference check: https://github.com/brunneis/ethereum-workshop
